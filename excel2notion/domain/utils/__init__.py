@@ -1,4 +1,5 @@
 from .excel_parser import parse_excel_file
+from .excel_writer import create_excel_from_data
 from .property_detector import smart_detect_property_type
 from .property_converter import convert_to_notion_properties
 from .pdf_parser import extract_text_from_input, is_pdf, parse_pdf
@@ -13,6 +14,7 @@ from .faiss_index import FAISSIndexManager
 
 __all__ = [
     "parse_excel_file",
+    "create_excel_from_data",
     "smart_detect_property_type",
     "convert_to_notion_properties",
     "extract_text_from_input",
