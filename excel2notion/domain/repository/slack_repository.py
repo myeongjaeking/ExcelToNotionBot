@@ -78,4 +78,24 @@ class SlackRepository:
         except SlackApiError as e:
             logger.error(f"Slack API error: {e.response['error']}")
             raise SlackException(status_code=500, detail=f"Slack API error: {e.response['error']}")
+    
+    def upload_file(self, channel_id: str, file_content: bytes, filename: str, title: str = None):
+        """Slack 채널에 파일 업로드"""
+        try:
+            from io import BytesIO
+            
+            # Slack SDK의 files_upload_v2 사용
+            result = self.client.files_upload_v2(
+                channel=channel_id,
+                file=BytesIO(file_content),
+                filename=filename,
+                title=title or filename
+            )
+            return result
+        except SlackApiError as e:
+            logger.error(f"Slack API error: {e.response['error']}")
+            raise SlackException(status_code=500, detail=f"파일 업로드 실패: {e.response['error']}")
+        except Exception as e:
+            logger.error(f"Failed to upload file: {str(e)}")
+            raise SlackException(status_code=500, detail=f"파일 업로드 실패: {str(e)}")
 

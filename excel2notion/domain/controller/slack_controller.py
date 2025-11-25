@@ -8,6 +8,7 @@ from slack_sdk.errors import SlackApiError
 from ..service.excel_service import ExcelService
 from ..service.notion_service import NotionService
 from ..service.recommendation_service import RecommendationService
+from ..service.notion_to_excel_service import NotionToExcelService
 from ..repository.slack_repository import SlackRepository
 from ..repository.gemini_repository import GeminiRepository
 from ..repository.embedding_repository import EmbeddingRepository
@@ -52,6 +53,18 @@ def get_recommendation_service() -> RecommendationService:
     return RecommendationService(gemini_repo, embedding_repo, notion_repo)
 
 
+def get_notion_to_excel_service() -> NotionToExcelService:
+    """NotionToExcelService 인스턴스 생성"""
+    notion_client = get_notion_client()
+    if not notion_client:
+        raise ConfigurationException(detail="Notion 클라이언트가 초기화되지 않았습니다.")
+    
+    from ..repository.notion_repository import NotionRepository
+    notion_repo = NotionRepository(notion_client)
+    
+    return NotionToExcelService(notion_repo)
+
+
 @router.post("/commands")
 async def slack_command(request: Request):
     """Slack 슬래시 커맨드 엔드포인트"""
@@ -82,6 +95,12 @@ async def slack_command(request: Request):
         # /append2top3 커맨드 처리
         if command == "/append2top3":
             return await handle_append2top3_command(
+                text, channel_id, response_url, slack_client
+            )
+        
+        # /notion2excel 커맨드 처리
+        if command == "/notion2excel":
+            return await handle_notion2excel_command(
                 text, channel_id, response_url, slack_client
             )
         
@@ -408,6 +427,73 @@ async def handle_append2top3_command(
         
     except Exception as e:
         logger.error(f"Error processing append2top3 command: {str(e)}")
+        return JSONResponse(content={
+            "response_type": "ephemeral",
+            "text": f"❌ 오류가 발생했습니다: {str(e)}"
+        })
+
+
+async def handle_notion2excel_command(
+    text: str,
+    channel_id: str,
+    response_url: Optional[str],
+    slack_client
+):
+    """notion2excel 커맨드 처리"""
+    try:
+        slack_repo = SlackRepository(slack_client)
+        notion_to_excel_service = get_notion_to_excel_service()
+        
+        # 비동기로 처리 시작 알림
+        if response_url:
+            requests.post(response_url, json={
+                "response_type": "ephemeral",
+                "text": "📊 Notion 데이터를 Excel로 변환 중..."
+            })
+        
+        # Notion 데이터베이스 ID 가져오기
+        db_id = get_notion_database_id()
+        if not db_id:
+            return JSONResponse(content={
+                "response_type": "ephemeral",
+                "text": "Notion 데이터베이스 ID가 설정되지 않았습니다. NOTION_DATABASE_ID를 확인해주세요."
+            })
+        
+        # 텍스트에서 데이터베이스 ID를 지정했는지 확인 (선택사항)
+        if text and text.strip():
+            db_id = text.strip()
+        
+        # Notion 데이터를 Excel로 변환
+        excel_content = notion_to_excel_service.export_to_excel(db_id)
+        
+        # 파일명 생성
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"notion_export_{timestamp}.xlsx"
+        
+        # Slack에 파일 업로드
+        logger.info(f"Uploading Excel file to Slack: {filename}")
+        slack_repo.upload_file(
+            channel_id=channel_id,
+            file_content=excel_content,
+            filename=filename,
+            title=f"Notion Export - {timestamp}"
+        )
+        
+        result_text = f"✅ Excel 파일 생성 완료!\n\n"
+        result_text += f"📁 파일명: {filename}\n"
+        result_text += f"📊 데이터베이스 ID: {db_id}\n"
+        
+        # Slack에 알림 전송
+        slack_repo.post_message(channel_id, result_text)
+        
+        return JSONResponse(content={
+            "response_type": "in_channel",
+            "text": result_text
+        })
+        
+    except Exception as e:
+        logger.error(f"Error processing notion2excel command: {str(e)}")
         return JSONResponse(content={
             "response_type": "ephemeral",
             "text": f"❌ 오류가 발생했습니다: {str(e)}"
