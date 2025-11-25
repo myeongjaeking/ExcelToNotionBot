@@ -246,8 +246,8 @@
 7. 유사도 계산 및 Top1 선택
 8. 추천 이유 생성 (Gemini)
 9. 결과를 Notion에 저장 및 Slack 알림
-   ![시나리오2](image/scenario2.png.png)
-   ![시나리오2 플로우차트](image/scenario2_flowchart.png.png)
+   ![시나리오2](image/scenario2.png)
+   ![시나리오2 플로우차트](image/scenario2_flowchart.png)
 
 ### 시나리오 3: 데이터 추가 및 Top3 추천
 
@@ -259,8 +259,8 @@
 2. Notion API로 DB 조회
 3. Excel 파일로 변환
 4. Slack에 파일 업로드
-   ![시나리오4](image/scenario4.png.png)
-   ![시나리오4 플로우차트](image/scenario4_flowchart.png.png)
+   ![시나리오4](image/scenario4.png)
+   ![시나리오4 플로우차트](image/scenario4_flowchart.png)
 
 ---
 
