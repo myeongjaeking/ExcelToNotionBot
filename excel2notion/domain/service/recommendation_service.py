@@ -232,6 +232,205 @@ class RecommendationService:
             logger.error(f"Error in process_append2top1: {str(e)}")
             raise
     
+    def process_append2top3(
+        self,
+        text: Optional[str],
+        file_content: Optional[bytes],
+        database_id: str
+    ) -> Dict:
+        """append2top3 전체 프로세스 실행 (Top3 추천)"""
+        try:
+            # 1. 입력값 분석 (자연어/PDF 판별 및 텍스트 추출)
+            logger.info("Extracting text from input...")
+            extracted_text = extract_text_from_input(file_content, text)
+            
+            # 2. Gemini로 정해진 클래스로 변환
+            logger.info("Classifying text with Gemini...")
+            structured_data = self.gemini_repo.classify_to_structured_data(extracted_text)
+            logger.info(f"Structured data: {structured_data}")
+            
+            # 3. 열 가중치 적용하여 임베딩 생성
+            logger.info("Creating weighted embedding...")
+            weights = get_column_weights()
+            query_embedding = create_weighted_embedding(structured_data, weights)
+            
+            # 4. FAISS 인덱스에서 검색 (Top3)
+            logger.info("Searching in FAISS index for Top3...")
+            faiss_manager = get_faiss_manager()
+            
+            # FAISS 인덱스가 비어있으면 Notion에서 데이터를 가져와서 인덱스 생성
+            if faiss_manager.index is None or faiss_manager.index.ntotal == 0:
+                logger.warning("FAISS index is empty. Loading from Notion and building index...")
+                self._build_faiss_index_from_notion(database_id)
+            
+            # FAISS에서 Top3 검색
+            results = faiss_manager.search(query_embedding, k=3)
+            
+            if not results:
+                raise ValueError("검색 결과가 없습니다.")
+            
+            if len(results) < 3:
+                logger.warning(f"Only {len(results)} results found, using available results")
+            
+            # Top3 결과 처리
+            top3_results = []
+            for idx, (page_id, page_data, similarity_score) in enumerate(results[:3], 1):
+                # 추천 주류 가져오기
+                recommended_drink = page_data.get("추천주류", page_data.get("추천 주류", ""))
+                if not recommended_drink:
+                    recommended_drink = "소주"
+                
+                # 기존 추천 이유 가져오기
+                top_recommendation_reason = page_data.get("추천 이유", page_data.get("추천이유", ""))
+                if not top_recommendation_reason:
+                    logger.info(f"Generating recommendation reason for top{idx} restaurant...")
+                    top_recommendation_reason = self.gemini_repo.generate_top1_recommendation_reason(page_data)
+                
+                # 새로운 추천 이유 생성 (소믈리에 스타일)
+                logger.info(f"Generating recommendation reason for top{idx} restaurant...")
+                structured_data_with_drink = structured_data.copy()
+                structured_data_with_drink["추천주류"] = recommended_drink
+                
+                page_data_with_drink = page_data.copy()
+                if "추천주류" not in page_data_with_drink and "추천 주류" not in page_data_with_drink:
+                    page_data_with_drink["추천주류"] = recommended_drink
+                
+                recommendation_reason = self.gemini_repo.generate_recommendation_reason(
+                    test_row=structured_data_with_drink,
+                    similar_train_row=page_data_with_drink,
+                    existing_reason=top_recommendation_reason,
+                    similarity_score=similarity_score
+                )
+                
+                # 추천 이유 간의 유사도 계산
+                reason_embedding1 = create_embedding(recommendation_reason)
+                reason_embedding2 = create_embedding(top_recommendation_reason)
+                reason_similarity = cosine_similarity(reason_embedding1, reason_embedding2)
+                
+                top3_results.append({
+                    "rank": idx,
+                    "page_id": page_id,
+                    "restaurant_name": page_data.get("식당명", "알 수 없음"),
+                    "recommended_drink": recommended_drink,
+                    "similarity_score": similarity_score,
+                    "recommendation_reason": recommendation_reason,
+                    "top_recommendation_reason": top_recommendation_reason,
+                    "reason_similarity": reason_similarity,
+                    "page_data": page_data
+                })
+            
+            # Top1의 추천 주류를 사용 (가장 높은 유사도)
+            top1_recommended_drink = top3_results[0]["recommended_drink"]
+            
+            # 7. 결과를 Notion에 저장
+            logger.info("Saving result to Notion...")
+            db_properties = self.notion_repo.get_database_properties(database_id)
+            
+            # structured_data의 키를 Notion DB 필드명에 맞게 변환
+            structured_data_normalized = structured_data.copy()
+            if "음식 종류" in structured_data_normalized:
+                if "음식종류" in db_properties and "음식 종류" not in db_properties:
+                    structured_data_normalized["음식종류"] = structured_data_normalized.pop("음식 종류")
+            elif "음식종류" in structured_data_normalized:
+                if "음식 종류" in db_properties and "음식종류" not in db_properties:
+                    structured_data_normalized["음식 종류"] = structured_data_normalized.pop("음식종류")
+            
+            # DataFrame 생성 (단일 행)
+            df = pd.DataFrame([structured_data_normalized])
+            properties = convert_to_notion_properties(df.iloc[0], df, db_properties)
+            
+            # 음식종류가 properties에 없으면 명시적으로 추가
+            food_type = structured_data.get("음식 종류", structured_data.get("음식종류", ""))
+            if food_type and "음식 종류" not in properties and "음식종류" not in properties:
+                if "음식 종류" in db_properties:
+                    properties["음식 종류"] = {
+                        "rich_text": [
+                            {
+                                "text": {
+                                    "content": str(food_type)
+                                }
+                            }
+                        ]
+                    }
+                elif "음식종류" in db_properties:
+                    properties["음식종류"] = {
+                        "rich_text": [
+                            {
+                                "text": {
+                                    "content": str(food_type)
+                                }
+                            }
+                        ]
+                    }
+            
+            # Top1의 추천 주류와 추천 이유를 properties에 추가
+            if "추천 주류" in db_properties:
+                properties["추천 주류"] = {
+                    "rich_text": [
+                        {
+                            "text": {
+                                "content": top1_recommended_drink
+                            }
+                        }
+                    ]
+                }
+            elif "추천주류" in db_properties:
+                properties["추천주류"] = {
+                    "rich_text": [
+                        {
+                            "text": {
+                                "content": top1_recommended_drink
+                            }
+                        }
+                    ]
+                }
+            
+            if "추천 이유" in db_properties:
+                properties["추천 이유"] = {
+                    "rich_text": [
+                        {
+                            "text": {
+                                "content": top3_results[0]["recommendation_reason"][:2000]
+                            }
+                        }
+                    ]
+                }
+            elif "추천이유" in db_properties:
+                properties["추천이유"] = {
+                    "rich_text": [
+                        {
+                            "text": {
+                                "content": top3_results[0]["recommendation_reason"][:2000]
+                            }
+                        }
+                    ]
+                }
+            
+            # 임베딩과 함께 페이지 생성
+            new_page_id = self.embedding_repo.create_page_with_embedding(
+                database_id,
+                properties,
+                query_embedding
+            )
+            
+            # FAISS 인덱스에 새 페이지 추가
+            logger.info("Adding new page to FAISS index...")
+            faiss_manager = get_faiss_manager()
+            faiss_manager.add_embedding(new_page_id, query_embedding, structured_data)
+            faiss_manager.save_index()
+            logger.info("New page added to FAISS index and saved")
+            
+            return {
+                "success": True,
+                "top3_results": top3_results,
+                "new_page_id": new_page_id,
+                "structured_data": structured_data
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in process_append2top3: {str(e)}")
+            raise
+    
     def _build_faiss_index_from_notion(self, database_id: str):
         """Notion에서 모든 페이지를 가져와서 FAISS 인덱스 구축"""
         try:
