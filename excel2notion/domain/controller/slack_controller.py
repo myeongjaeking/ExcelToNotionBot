@@ -7,7 +7,10 @@ from slack_sdk.errors import SlackApiError
 
 from ..service.excel_service import ExcelService
 from ..service.notion_service import NotionService
+from ..service.recommendation_service import RecommendationService
 from ..repository.slack_repository import SlackRepository
+from ..repository.gemini_repository import GeminiRepository
+from ..repository.embedding_repository import EmbeddingRepository
 from ..config.settings import get_notion_database_id, get_slack_client, get_notion_client
 from ..exception.exceptions import ConfigurationException
 
@@ -30,9 +33,23 @@ def get_notion_service() -> NotionService:
     notion_client = get_notion_client()
     if not notion_client:
         raise ConfigurationException(detail="Notion 클라이언트가 초기화되지 않았습니다.")
-    from repository.notion_repository import NotionRepository
+    from ..repository.notion_repository import NotionRepository
     notion_repo = NotionRepository(notion_client)
     return NotionService(notion_repo)
+
+
+def get_recommendation_service() -> RecommendationService:
+    """RecommendationService 인스턴스 생성"""
+    notion_client = get_notion_client()
+    if not notion_client:
+        raise ConfigurationException(detail="Notion 클라이언트가 초기화되지 않았습니다.")
+    
+    gemini_repo = GeminiRepository()
+    embedding_repo = EmbeddingRepository(notion_client)
+    from ..repository.notion_repository import NotionRepository
+    notion_repo = NotionRepository(notion_client)
+    
+    return RecommendationService(gemini_repo, embedding_repo, notion_repo)
 
 
 @router.post("/commands")
@@ -48,13 +65,7 @@ async def slack_command(request: Request):
         
         logger.info(f"Received command: {command}, text: {text}, channel: {channel_id}")
         
-        if command != "/excel2notion":
-            return JSONResponse(content={
-                "response_type": "ephemeral",
-                "text": "Unknown command"
-            })
-        
-        # 채널에서 최근 Excel 파일 찾기
+        # Slack 클라이언트 가져오기 (모든 커맨드에서 필요)
         slack_client = get_slack_client()
         if not slack_client:
             return JSONResponse(content={
@@ -62,6 +73,20 @@ async def slack_command(request: Request):
                 "text": "Slack 클라이언트가 초기화되지 않았습니다. SLACK_BOT_TOKEN을 확인해주세요."
             })
         
+        # /append2top1 커맨드 처리
+        if command == "/append2top1":
+            return await handle_append2top1_command(
+                text, channel_id, response_url, slack_client
+            )
+        
+        # /excel2notion 커맨드 처리
+        if command != "/excel2notion":
+            return JSONResponse(content={
+                "response_type": "ephemeral",
+                "text": "Unknown command"
+            })
+        
+        # 채널에서 최근 Excel 파일 찾기
         try:
             slack_repo = SlackRepository(slack_client)
             excel_service = ExcelService(slack_repo)
@@ -201,4 +226,94 @@ async def slack_events(request: Request):
     except Exception as e:
         logger.error(f"Error processing event: {str(e)}")
         return JSONResponse(content={"status": "error", "message": str(e)})
+
+
+async def handle_append2top1_command(
+    text: str,
+    channel_id: str,
+    response_url: Optional[str],
+    slack_client
+):
+    """append2top1 커맨드 처리"""
+    try:
+        slack_repo = SlackRepository(slack_client)
+        recommendation_service = get_recommendation_service()
+        
+        # 텍스트 입력이 있으면 사용, 없으면 파일 찾기
+        file_content = None
+        if not text:
+            # 채널의 최근 파일 목록 가져오기 (PDF)
+            files = slack_repo.list_files(channel_id, file_types="pdf", count=10)
+            
+            if not files:
+                return JSONResponse(content={
+                    "response_type": "ephemeral",
+                    "text": "텍스트를 입력하거나 PDF 파일을 업로드해주세요."
+                })
+            
+            # 가장 최근 파일 사용
+            latest_file = files[0]
+            file_id = latest_file["id"]
+            file_name = latest_file.get("name", "file.pdf")
+            
+            # 비동기로 처리 시작 알림
+            if response_url:
+                requests.post(response_url, json={
+                    "response_type": "ephemeral",
+                    "text": f"📂 파일 '{file_name}' 처리를 시작합니다..."
+                })
+            
+            # 파일 다운로드
+            file_content, _ = slack_repo.download_file(file_id)
+        else:
+            # 비동기로 처리 시작 알림
+            if response_url:
+                requests.post(response_url, json={
+                    "response_type": "ephemeral",
+                    "text": "📝 텍스트를 분석하고 있습니다..."
+                })
+        
+        # Notion 데이터베이스 ID 가져오기
+        db_id = get_notion_database_id()
+        if not db_id:
+            return JSONResponse(content={
+                "response_type": "ephemeral",
+                "text": "Notion 데이터베이스 ID가 설정되지 않았습니다. NOTION_DATABASE_ID를 확인해주세요."
+            })
+        
+        # 추천 프로세스 실행
+        result = recommendation_service.process_append2top1(
+            text=text if text else None,
+            file_content=file_content,
+            database_id=db_id
+        )
+        
+        # 결과 메시지 생성
+        result_text = f"✅ 추천 완료!\n\n"
+        result_text += f"🏆 추천 식당: {result['top1_restaurant']}\n"
+        result_text += f"🍺 추천 주류: {result.get('recommended_drink', '소주')}\n"
+        result_text += f"📊 유사도 점수: {result['similarity_score']:.4f}\n\n"
+        result_text += f"💡 추천 근거:\n{result['recommendation_reason']}\n\n"
+        
+        # Top1 식당의 추천 이유와 유사도
+        if 'top1_recommendation_reason' in result and 'reason_similarity' in result:
+            result_text += f"📝 Top1 식당 추천 이유:\n{result['top1_recommendation_reason']}\n\n"
+            result_text += f"🔗 추천 이유 유사도: {result['reason_similarity']:.4f}\n\n"
+        
+        result_text += f"➕ 새로 추가된 행 ID: {result['new_page_id']}\n"
+        
+        # Slack에 알림 전송
+        slack_repo.post_message(channel_id, result_text)
+        
+        return JSONResponse(content={
+            "response_type": "in_channel",
+            "text": result_text
+        })
+        
+    except Exception as e:
+        logger.error(f"Error processing append2top1 command: {str(e)}")
+        return JSONResponse(content={
+            "response_type": "ephemeral",
+            "text": f"❌ 오류가 발생했습니다: {str(e)}"
+        })
 

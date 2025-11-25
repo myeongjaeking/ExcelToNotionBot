@@ -17,6 +17,7 @@ NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 
 def get_notion_client() -> Optional[Client]:
@@ -41,4 +42,9 @@ def get_notion_database_id() -> Optional[str]:
 def get_slack_bot_token() -> Optional[str]:
     """Slack Bot Token 반환"""
     return SLACK_BOT_TOKEN
+
+
+def get_gemini_api_key() -> Optional[str]:
+    """Gemini API Key 반환"""
+    return GEMINI_API_KEY
 
