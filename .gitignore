@@ -1,3 +1,5 @@
 .venv/
 .env/
 excel2notion/domain/.env
+__pycache__/
+.pyc
