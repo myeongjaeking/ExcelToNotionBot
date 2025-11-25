@@ -232,7 +232,7 @@
 2. Excel → JSON 변환
 3. Notion API 스키마로 매핑
 4. Notion API에 데이터 전송
-   ![시나리오1](images/scenario1.png)
+   ![시나리오1](image/scenario1.png)
    ![시나리오1 플로우차트](image/scenario1_flowchart.png)
 
 ### 시나리오 2: 데이터 추가 및 Top1 추천
