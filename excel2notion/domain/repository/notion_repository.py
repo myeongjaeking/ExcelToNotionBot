@@ -3,18 +3,33 @@ import json
 from typing import Dict, Optional, List
 from anthropic import Anthropic
 from ..exception.exceptions import NotionException
+from mcp.server.fastmcp import FastMCP
+from tools.get_transcript import get_transcript
+from tools.generate_summary import generate_summary
 
 logger = logging.getLogger(__name__)
 
 class NotionMCPRepository:
     """Notion MCP (Model Context Protocol) 접근을 담당하는 Repository"""
     
+    mcp = FastMCP("Meeting_Summary")
+
+    @mcp.tool()
+    def summarize(room_id: str) -> dict:
+        """Summarizes the transcript of a meeting and returns the summary."""
+        transcript = get_transcript(room_id)
+        summary = generate_summary(transcript)
+        return summary
+
     def __init__(self, api_key: Optional[str] = None):
         if not api_key:
             raise NotionException(status_code=500, detail="Claude API key not initialized")
-        self.client = Anthropic(api_key=api_key)
-        self.model = "claude-3-5-sonnet-20241022"
-        # Notion MCP 설정
+        self.client = anthropic.Ahthropic()
+        message = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "Hello, Claude"}]
+        )    
         self.mcp_tools = self._initialize_notion_mcp()
     
     def _initialize_notion_mcp(self) -> List[Dict]:
