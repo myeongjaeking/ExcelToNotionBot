@@ -1,6 +1,7 @@
 import logging
 import json
-from anthropic import Anthropic
+from xmlrpc import client
+from anthropic import antophic
 from typing import Dict, Any
 from ..config.settings import get_claude_api_key
 from ..exception.exceptions import ConfigurationException
@@ -14,9 +15,12 @@ class ClaudeRepository:
         api_key = get_claude_api_key()
         if not api_key:
             raise ConfigurationException(detail="Claude API 키가 설정되지 않았습니다.")
-        self.client = Anthropic(api_key=api_key)
-        self.model = "claude-3-5-sonnet-20241022"
-    
+        self.client = antophic.Ahthropic()
+        message = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "Hello, Claude"}]
+        )    
     def classify_to_structured_data(self, text: str) -> Dict[str, Any]:
         """자연어/PDF 텍스트를 구조화된 데이터로 변환"""
         prompt = f"""다음 텍스트를 분석하여 식당 정보를 추출하세요. 다음 형식의 JSON으로 응답하세요:
